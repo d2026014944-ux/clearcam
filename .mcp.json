@@ -1,0 +1,27 @@
+{
+  "servers": {
+    "filesystem": {
+      "enabled": true,
+      "mode": "read-write",
+      "roots": [
+        "/workspaces/clearcam"
+      ]
+    },
+    "github": {
+      "enabled": true,
+      "repo": "roryclear/clearcam",
+      "readOnly": false
+    },
+    "postgres": {
+      "enabled": false,
+      "note": "Configure connection string via env before enabling."
+    }
+  },
+  "policy": {
+    "requireContextRead": [
+      "CLAUDE.md",
+      ".mcp.json"
+    ],
+    "defaultMode": "safe"
+  }
+}

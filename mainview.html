@@ -739,6 +739,75 @@
       color: var(--text-primary);
     }
 
+    .osint-section {
+      margin-top: 24px;
+      font-family: sans-serif;
+    }
+
+    .osint-toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .osint-toolbar select,
+    .osint-toolbar button {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .osint-toolbar button {
+      background: var(--accent-primary);
+      border: none;
+      color: white;
+    }
+
+    .osint-toolbar button:hover {
+      background: var(--accent-hover);
+    }
+
+    .osint-item {
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background: var(--bg-secondary);
+    }
+
+    .osint-meta {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .osint-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .osint-actions button {
+      padding: 6px 10px;
+      border: none;
+      border-radius: 4px;
+      color: white;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .osint-confirm {
+      background: var(--accent-success);
+    }
+
+    .osint-dismiss {
+      background: var(--accent-danger);
+    }
+
     #eventImagesContainer {
       display: flex;
       flex-wrap: wrap;
@@ -1387,6 +1456,24 @@
     </button>
   </div>
   </div>
+
+  <div class="osint-section">
+    <h3>OSINT Results</h3>
+    <div class="osint-toolbar">
+      <label for="osintStatusFilter">Status:</label>
+      <select id="osintStatusFilter">
+        <option value="">All</option>
+        <option value="pending_review" selected>Pending review</option>
+        <option value="confirmed">Confirmed</option>
+        <option value="dismissed">Dismissed</option>
+      </select>
+      <button type="button" onclick="refreshOsintResults()">Refresh OSINT</button>
+      <span id="osintState" style="font-size:12px; color: var(--text-secondary);"></span>
+    </div>
+    <div id="osintResultsContainer">
+      <p style="text-align:center; color:#666; width:100%;">No OSINT results yet.</p>
+    </div>
+  </div>
   
   <div id="multiView"></div>
 
@@ -1664,6 +1751,7 @@
     let eventStart = 0;
     const EVENT_PAGE_SIZE = 50;
     let hasMoreEvents = true;
+    let currentOsintStatusFilter = 'pending_review';
 
     function openAlertsModal(cameraName) {
       currentAlertsCamera = cameraName;
@@ -2256,10 +2344,17 @@
       cameraFilter.addEventListener('change', function() {
         currentEventCameraFilter = this.value;
         loadEventImages(false);
+        refreshOsintResults();
       });
       alertsOnlyCheckbox.addEventListener('change', function() {
         alertsOnlyFilter = this.checked;
         loadEventImages(false);
+      });
+
+      const osintStatusFilter = document.getElementById('osintStatusFilter');
+      osintStatusFilter.addEventListener('change', function() {
+        currentOsintStatusFilter = this.value;
+        refreshOsintResults();
       });
     });
 
@@ -2972,6 +3067,155 @@
       currentEventCameraFilter = filter.value;
     }
 
+    async function fetchOsintStatus() {
+      try {
+        const res = await fetch('/osint_status');
+        const data = await res.json();
+        const el = document.getElementById('osintState');
+        if (!data.enabled) {
+          el.textContent = 'OSINT disabled';
+          return;
+        }
+        el.textContent = `Worker: ${data.worker_alive ? 'online' : 'offline'} | Queue: ${data.queue_size}`;
+      } catch (err) {
+        console.error('Failed to fetch OSINT status:', err);
+      }
+    }
+
+    async function refreshOsintResults() {
+      try {
+        await fetchOsintStatus();
+        const camQuery = currentEventCameraFilter ? `&cam=${encodeURIComponent(currentEventCameraFilter)}` : '';
+        const statusQuery = currentOsintStatusFilter ? `&status=${encodeURIComponent(currentOsintStatusFilter)}` : '';
+        const res = await fetch(`/osint_results?start=0&count=50${camQuery}${statusQuery}`);
+        const data = await res.json();
+        const container = document.getElementById('osintResultsContainer');
+
+        if (!data.enabled) {
+          container.innerHTML = '<p style="text-align:center; color:#666; width:100%;">OSINT pipeline disabled.</p>';
+          return;
+        }
+
+        const rows = data.results || [];
+        if (!rows.length) {
+          container.innerHTML = '<p style="text-align:center; color:#666; width:100%;">No OSINT results for this filter.</p>';
+          return;
+        }
+
+        container.innerHTML = rows.map((row) => {
+          const ev = row.event || {};
+          const result = row.result || {};
+          const scoreNum = typeof result.blended_score === 'number' ? result.blended_score : null;
+          const score = scoreNum !== null ? scoreNum.toFixed(3) : '-';
+          const when = row.updated_at ? new Date(row.updated_at * 1000).toLocaleString() : '-';
+          const status = row.status || 'pending_review';
+          const hasTimestamp = typeof ev.timestamp === 'number' && ev.timestamp > 0;
+          
+          // Determinar cor do score
+          let scoreBgColor = '#6c757d';
+          let scoreText = 'Unknown';
+          if (scoreNum !== null) {
+            if (scoreNum >= 0.8) {
+              scoreBgColor = '#28a745'; // Verde
+              scoreText = 'High';
+            } else if (scoreNum >= 0.5) {
+              scoreBgColor = '#ffc107'; // Amarelo
+              scoreText = 'Medium';
+            } else {
+              scoreBgColor = '#dc3545'; // Vermelho
+              scoreText = 'Low';
+            }
+          }
+          
+          // Badges de plugins
+          const plugins = Array.isArray(result.plugins) ? result.plugins : [];
+          const pluginBadges = plugins.length > 0
+            ? plugins.map(p => `<span style="display: inline-block; padding: 2px 6px; margin-right: 4px; background: #e9ecef; color: #495057; border-radius: 3px; font-size: 10px; font-weight: bold;">${p}</span>`).join('')
+            : '<span style="font-size: 10px; color: #aaa;">No plugins</span>';
+          
+          const navigationBtns = hasTimestamp && ev.cam_name
+            ? `
+              <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;">
+                <button style="padding: 4px 8px; background: #17a2b8; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;"
+                        onclick="navigateToOsintEvent('${ev.cam_name}', ${ev.timestamp})">
+                  📹 View Event
+                </button>
+                <button style="padding: 4px 8px; background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px;"
+                        onclick="filterByCameraAndReload('${ev.cam_name}')">
+                  📷 View Camera
+                </button>
+              </div>
+            `
+            : '';
+          
+          const actions = status === 'pending_review'
+            ? `
+              <div class="osint-actions">
+                <button class="osint-confirm" onclick="applyOsintAction('${row.job_id}','confirm')">Confirm</button>
+                <button class="osint-dismiss" onclick="applyOsintAction('${row.job_id}','dismiss')">Dismiss</button>
+              </div>
+            `
+            : '';
+
+          return `
+            <div class="osint-item">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <strong>${ev.cam_name || 'unknown camera'}</strong>
+                <span style="padding: 2px 8px; background: ${scoreBgColor}; color: white; border-radius: 3px; font-size: 11px; font-weight: bold;">
+                  ${scoreText} (${score})
+                </span>
+              </div>
+              <div class="osint-meta">
+                Class: ${ev.class_id ?? '-'} | Updated: ${when}<br>
+                Plugins: ${pluginBadges}
+              </div>
+              <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap;">
+                Status: <span style="padding: 2px 6px; background: #e9ecef; color: #495057; border-radius: 3px; font-size: 10px; font-weight: bold;">${status}</span>
+              </div>
+              ${navigationBtns}
+              ${actions}
+            </div>
+          `;
+        }).join('');
+      } catch (err) {
+        console.error('Failed to load OSINT results:', err);
+        document.getElementById('osintResultsContainer').innerHTML = '<p style="text-align:center; color:red; width:100%;">Error loading OSINT results.</p>';
+      }
+    }
+
+    async function applyOsintAction(jobId, action) {
+      const reason = prompt(`Optional reason for ${action}:`) || null;
+      try {
+        const res = await fetch('/osint_alert_action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: jobId, action, reason })
+        });
+        if (!res.ok) {
+          throw new Error(`Action failed: ${res.status}`);
+        }
+        await refreshOsintResults();
+      } catch (err) {
+        console.error('Failed to apply OSINT action:', err);
+        alert('Failed to apply OSINT action.');
+      }
+    }
+
+    function navigateToOsintEvent(camName, timestamp) {
+      const eventDate = new Date(timestamp * 1000).toLocaleDateString('en-CA');
+      playVideoAtTime(camName, timestamp, eventDate);
+    }
+
+    function filterByCameraAndReload(camName) {
+      const camFilter = document.getElementById('cameraFilter');
+      if (camFilter) {
+        camFilter.value = camName;
+        currentEventCameraFilter = camName;
+      }
+      loadEventImages(false);
+      document.getElementById('osintResultsContainer').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
     let currentImageSearchText = '';
     function searchEventImages() {
       dontRefresh = true;
@@ -3402,7 +3646,9 @@
     });
 
     fetchCameras();
+    refreshOsintResults();
     setInterval(fetchCameras, 5000);
+    setInterval(refreshOsintResults, 10000);
   </script>
 </body>
 </html>

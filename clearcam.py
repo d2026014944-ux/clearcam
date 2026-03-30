@@ -28,6 +28,7 @@ import multiprocessing
 import re
 import base64
 from utils.helpers import send_notif, find_ffmpeg, export_clip, upload_file, encrypt_file, export_and_upload
+from osint import OSINTPipeline
 
 # RTSP URL
 # Video capture thread
@@ -43,6 +44,25 @@ from utils.helpers import BASE_DIR
 
 (BASE_DIR / "cameras").mkdir(parents=True, exist_ok=True)
 models = {1: "t", 2: "s", 3: "m", 4: "c", 5: "e", 6: "nano", 7: "small", 8:"medium", 9:"large"}
+osint_pipeline = None
+
+
+def _predicted_class_id(filtered_preds):
+  if isinstance(filtered_preds, np.ndarray) and filtered_preds.size > 0:
+    best_idx = int(np.argmax(filtered_preds[:, 4]))
+    return int(filtered_preds[best_idx][5])
+  return None
+
+
+def enqueue_osint_event(event):
+  global osint_pipeline
+  if osint_pipeline is None:
+    return None
+  try:
+    return osint_pipeline.enqueue_event(event)
+  except Exception as e:
+    print(f"OSINT enqueue failed: {e}")
+    return None
 
 class RollingClassCounter:
   def __init__(self, window_seconds=None, max=None, classes=None, sched=[[0,86399],True,True,True,True,True,True,True],cam_name=None, desc=None, threshold=0.28):
@@ -388,6 +408,15 @@ class VideoCapture:
                     if (plain := filepath / f"{ts}.jpg").exists() and (filepath / f"{ts}_notif.jpg").exists():
                       plain.unlink() # only one image per event
                       filename = filepath / f"{ts}_notif.jpg"
+                    class_id = _predicted_class_id(filtered_preds)
+                    enqueue_osint_event({
+                      "cam_name": self.cam_name,
+                      "class_id": class_id,
+                      "zone_alert": bool(alert.zone),
+                      "is_notif": bool(alert.is_notif),
+                      "timestamp": ts,
+                      "thumbnail": str(filename),
+                    })
                     text = f"Event Detected ({self.cam_name})"
                     if userID is not None and not self.vod and alert.is_notif: threading.Thread(target=send_notif, args=(userID,text,), daemon=True).start()
                     last_det = time.time()
@@ -651,6 +680,7 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         self.clip = kwargs.pop('clip_instance', None)
         self.searcher = kwargs.pop('searcher_instance', None)
+        self.osint = kwargs.pop('osint_instance', None)
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args): pass # don't print stuff
@@ -691,6 +721,47 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         if cam_name:
             return BASE_DIR / "cameras" / cam_name / "streams"
         return BASE_DIR / "cameras"
+
+    def _handle_get_osint_status(self):
+      if not self.osint:
+        self.send_200({"enabled": False})
+        return
+      status = self.osint.get_status()
+      status["enabled"] = True
+      self.send_200(status)
+
+    def _handle_get_osint_results(self, query, cam_name):
+      if not self.osint:
+        self.send_200({"results": [], "count": 0, "enabled": False})
+        return
+      start = int(query.get("start", [0])[0])
+      count = int(query.get("count", [100])[0])
+      status = query.get("status", [None])[0]
+      rows = self.osint.list_results(cam_name=cam_name, status=status)
+      rows = rows[start:start+count]
+      self.send_200({"results": rows, "count": len(rows), "enabled": True})
+
+    def _handle_post_osint_alert_action(self, raw_body):
+      if not self.osint:
+        self.send_error(503, "OSINT pipeline disabled")
+        return
+      try:
+        data = json.loads(raw_body)
+      except json.JSONDecodeError:
+        self.send_error(400, "Invalid JSON")
+        return
+
+      job_id = data.get("job_id")
+      action = data.get("action")
+      reason = data.get("reason")
+      if not job_id or action not in ["confirm", "dismiss"]:
+        self.send_error(400, "Missing or invalid job_id/action")
+        return
+      updated = self.osint.apply_action(job_id, action, reason)
+      if updated is None:
+        self.send_error(404, "Job not found")
+        return
+      self.send_200({"status": "ok", "result": updated})
     
     def do_GET(self):
         parsed_path = urlparse(unquote(self.path))
@@ -706,6 +777,14 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         
         if parsed_path.path == "/get_max_storage":
           self.send_200(body={"max_gb":self.server.max_gb})
+          return
+
+        if parsed_path.path == "/osint_status":
+          self._handle_get_osint_status()
+          return
+
+        if parsed_path.path == "/osint_results":
+          self._handle_get_osint_results(query=query, cam_name=cam_name)
           return
 
         if parsed_path.path == "/list_cameras":
@@ -1000,6 +1079,12 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_path = urlparse(self.path)
+        if parsed_path.path == "/osint_alert_action":
+          content_length = int(self.headers.get("Content-Length", 0))
+          raw_body = self.rfile.read(content_length)
+          self._handle_post_osint_alert_action(raw_body=raw_body)
+          return
+
         if self.path.startswith("/analyse-footage"):
           params = parse_qs(parsed_path.query)
           filename = params.get("filename", [None])[0]
@@ -1226,6 +1311,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     def __init__(self, server_address, use_clip, RequestHandlerClass):
         ThreadingMixIn.__init__(self)
         HTTPServer.__init__(self, server_address, RequestHandlerClass)
+        global osint_pipeline
         self.cleanup_stop_event = threading.Event()
         self.cleanup_thread = None
         max_gb = database.run_get("max_storage", None)
@@ -1235,6 +1321,9 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         self.max_gb = max_gb["all"]
         self.clip = CachedCLIPSearch() if use_clip else None
         self.searcher = CLIPSearch() if use_clip else None
+        if osint_pipeline is None:
+          osint_pipeline = OSINTPipeline(database)
+        self.osint = osint_pipeline
         self.clip_stop_event = threading.Event()
         self.clip_thread = None
         self._setup_cleanup_and_clip_thread()
@@ -1255,7 +1344,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             self.clip_lock.release()
 
     def finish_request(self, request, client_address):
-      self.RequestHandlerClass(request, client_address, self, clip_instance=self.clip, searcher_instance=self.searcher)
+      self.RequestHandlerClass(request, client_address, self, clip_instance=self.clip, searcher_instance=self.searcher, osint_instance=self.osint)
 
     def _setup_cleanup_and_clip_thread(self):
         if self.cleanup_thread is None or not self.cleanup_thread.is_alive():
@@ -1362,12 +1451,15 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             self.clip_stop_event.set()
         if hasattr(self, 'clip_thread') and self.clip_thread:
             self.clip_thread.join(timeout=5)
+        if hasattr(self, 'osint') and self.osint:
+          self.osint.shutdown()
 
         super().server_close()
 
 if __name__ == "__main__":
   multiprocessing.set_start_method("spawn", force=True)
   database = db()
+  osint_pipeline = OSINTPipeline(database)
   cams = database.run_get("links", None)
   url = next((arg.split("=", 1)[1] for arg in sys.argv[1:] if arg.startswith("--rtsp=")), None)
   is_file = url.endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')) if url is not None else False

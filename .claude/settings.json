@@ -1,0 +1,25 @@
+{
+  "omegaMatrix": {
+    "enabled": true,
+    "contextWarningAt": 70,
+    "contextCriticalAt": 80
+  },
+  "hooks": {
+    "PreToolUse": [
+      "bash .claude/hooks/pretool-omega-check.sh"
+    ],
+    "PostToolUse": [
+      "bash .claude/hooks/posttool-safety.sh"
+    ],
+    "PreCommit": [
+      "bash .claude/hooks/precommit-gate.sh"
+    ]
+  },
+  "guardrails": {
+    "requirePlanBeforeCode": true,
+    "requireTestsBeforeSrc": true,
+    "blockOnSecrets": true,
+    "blockOnLintFailure": true,
+    "blockOnTestFailure": true
+  }
+}
