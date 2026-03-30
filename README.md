@@ -73,6 +73,12 @@ https://x.com/RoryClear/status/1959249250811785405
 4. open localhost:8080 in your browser
 - use BEAM=2 python3 clearcam.py for extra performance (wait time on first run)
 
+## deploy free (Oracle Cloud Always Free)
+1. Follow the full guide in [docs/DEPLOY_FREE.md](docs/DEPLOY_FREE.md)
+2. Use bootstrap script `scripts/bootstrap_oracle_free.sh`
+3. Configure runtime values in `.env` (starting from `.env.example`)
+4. Use `deploy/free/clearcam.service` and `deploy/free/nginx-clearcam.conf`
+
 ## install iOS App from source
 1. git clone https://github.com/roryclear/clearcam.git
 2. open ios/clearcam.xcodeproj

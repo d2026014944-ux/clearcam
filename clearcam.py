@@ -762,6 +762,9 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Job not found")
         return
       self.send_200({"status": "ok", "result": updated})
+
+    def _handle_get_health(self):
+      self.send_200({"status": "ok", "service": "clearcam"})
     
     def do_GET(self):
         parsed_path = urlparse(unquote(self.path))
@@ -785,6 +788,10 @@ class HLSRequestHandler(BaseHTTPRequestHandler):
 
         if parsed_path.path == "/osint_results":
           self._handle_get_osint_results(query=query, cam_name=cam_name)
+          return
+
+        if parsed_path.path == "/health":
+          self._handle_get_health()
           return
 
         if parsed_path.path == "/list_cameras":

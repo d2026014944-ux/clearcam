@@ -1,0 +1,26 @@
+[Unit]
+Description=ClearCAM NVR service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=clearcam
+Group=clearcam
+WorkingDirectory=/opt/clearcam
+EnvironmentFile=/opt/clearcam/.env
+ExecStart=/usr/bin/bash /opt/clearcam/scripts/run_clearcam.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/clearcam /var/lib/clearcam
+
+[Install]
+WantedBy=multi-user.target

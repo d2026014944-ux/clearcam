@@ -89,3 +89,10 @@
 - Evidencia:
 - Correcao aplicada:
 - Nova regra:
+
+## Dissecacoes recentes
+- Incidente: Gate local precommit nao ficou verde durante o ciclo de deploy free.
+- Causa raiz: Ha divida tecnica de lint pre-existente em modulos legados (`detection/` e `ocsort_tracker/`) nao relacionada aos novos arquivos de deploy.
+- Evidencia: Execucao de `bash .claude/hooks/precommit-gate.sh` retornou erros E701/E721/F401/F405/E711 em arquivos legados.
+- Correcao aplicada: Mantivemos o escopo do ciclo em artefatos de deploy, validamos sintaxe dos novos scripts com `bash -n` e documentamos o bloqueio para um ciclo dedicado de saneamento de lint.
+- Nova regra: Para ciclos de infra/documentacao, executar o gate completo cedo e registrar bloqueios de baseline antes de seguir com implementacao.

@@ -93,3 +93,13 @@ def test_osint_alert_action_success():
     assert h.last_error is None
     assert h.last_200["status"] == "ok"
     assert h.last_200["result"]["status"] == "confirmed"
+
+
+def test_health_handler_response():
+    h = FakeHandler(FakeOSINT())
+
+    HLSRequestHandler._handle_get_health(h)
+
+    assert h.last_error is None
+    assert h.last_200["status"] == "ok"
+    assert h.last_200["service"] == "clearcam"
